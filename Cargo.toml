@@ -1,0 +1,17 @@
+[package]
+name = "awake"
+version = "0.1.0"
+edition = "2021"
+description = "A macOS menu bar app to prevent system sleep"
+authors = ["Your Name"]
+license = "MIT"
+
+[dependencies]
+cocoa = "0.26"
+objc = "0.2"
+core-foundation = "0.10"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

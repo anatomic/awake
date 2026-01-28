@@ -1,0 +1,26 @@
+# Rust build artifacts
+/target/
+debug/
+*.pdb
+
+# Cargo
+**/*.rs.bk
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+*.dSYM/
+
+# Build artifacts
+*.app
+*.dmg
+
+# Environment
+.env
+.env.local
