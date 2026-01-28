@@ -1,0 +1,117 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  APP_NAME: Awake
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Extract version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build universal binary
+        run: make universal
+
+      - name: Create app bundle
+        run: make bundle VERSION=${{ steps.version.outputs.version }}
+
+      - name: Import signing certificate
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          CERT_PATH="$RUNNER_TEMP/certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+
+          echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" \
+              -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: \
+              -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+      - name: Sign and notarize
+        env:
+          DEVELOPER_ID_APPLICATION: "Developer ID Application: ${{ secrets.APPLE_TEAM_ID }}"
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: ./scripts/sign.sh "${{ env.APP_NAME }}.app"
+
+      - name: Create release ZIP
+        run: |
+          rm -f "${{ env.APP_NAME }}.zip"
+          ditto -c -k --keepParent "${{ env.APP_NAME }}.app" "${{ env.APP_NAME }}.zip"
+
+      - name: Calculate SHA256
+        id: sha
+        run: |
+          sha=$(shasum -a 256 "${{ env.APP_NAME }}.zip" | awk '{print $1}')
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.APP_NAME }}.zip
+          generate_release_notes: true
+
+      - name: Update Homebrew tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          SHA256="${{ steps.sha.outputs.sha256 }}"
+          URL="https://github.com/anatomic/awake/releases/download/v${VERSION}/Awake.zip"
+
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/anatomic/homebrew-tap.git" /tmp/homebrew-tap
+          cd /tmp/homebrew-tap
+
+          mkdir -p Casks
+          cat > Casks/awake.rb << EOF
+          cask "awake" do
+            version "${VERSION}"
+            sha256 "${SHA256}"
+
+            url "${URL}"
+            name "Awake"
+            desc "macOS menu bar app to prevent system sleep"
+            homepage "https://github.com/anatomic/awake"
+
+            app "Awake.app"
+
+            zap trash: [
+              "~/Library/LaunchAgents/com.anatomic.awake.plist",
+            ]
+          end
+          EOF
+
+          # Remove leading whitespace from heredoc
+          sed -i '' 's/^          //' Casks/awake.rb
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/awake.rb
+          git commit -m "Update awake to ${VERSION}"
+          git push
