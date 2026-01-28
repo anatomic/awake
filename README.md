@@ -7,7 +7,7 @@ A macOS menu bar app to prevent system sleep. Lightweight, native, no dependenci
 ### Homebrew (recommended)
 
 ```sh
-brew tap anatomic/tap
+brew tap anatomic/awake
 brew install --cask awake
 ```
 

@@ -85,8 +85,8 @@ jobs:
           SHA256="${{ steps.sha.outputs.sha256 }}"
           URL="https://github.com/anatomic/awake/releases/download/v${VERSION}/Awake.zip"
 
-          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/anatomic/homebrew-tap.git" /tmp/homebrew-tap
-          cd /tmp/homebrew-tap
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/anatomic/homebrew-awake.git" /tmp/homebrew-awake
+          cd /tmp/homebrew-awake
 
           mkdir -p Casks
           cat > Casks/awake.rb << EOF

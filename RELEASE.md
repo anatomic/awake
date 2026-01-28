@@ -10,8 +10,8 @@
    - `APPLE_ID` — Apple ID email
    - `APPLE_TEAM_ID` — Apple Developer Team ID
    - `APPLE_APP_PASSWORD` — app-specific password
-   - `HOMEBREW_TAP_TOKEN` — GitHub PAT with push access to `anatomic/homebrew-tap`
-4. **Homebrew tap repo** `anatomic/homebrew-tap` exists on GitHub
+   - `HOMEBREW_TAP_TOKEN` — GitHub PAT with push access to `anatomic/homebrew-awake`
+4. **Homebrew tap repo** `anatomic/homebrew-awake` exists on GitHub
 
 ## Creating a Release
 
@@ -25,7 +25,7 @@ The GitHub Actions workflow will automatically:
 - Create the `.app` bundle
 - Sign and notarize with Apple
 - Create a GitHub Release with the ZIP artifact
-- Update the Homebrew cask in `anatomic/homebrew-tap`
+- Update the Homebrew cask in `anatomic/homebrew-awake`
 
 ## Local Signing (optional)
 
