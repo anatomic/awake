@@ -168,6 +168,7 @@ fn activate() {
 
 fn deactivate() {
     TIMER_EXPIRY.store(0, Ordering::Release);
+    cancel_timer();
     release_assertion(&ASSERTION_ID);
     release_assertion(&ASSERTION_ID_2);
     update_icon("moon.zzz.fill");
