@@ -15,10 +15,21 @@ use std::env;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+// Grand Central Dispatch bindings for main thread dispatch
+#[link(name = "System", kind = "dylib")]
+extern "C" {
+    fn dispatch_get_main_queue() -> *mut std::ffi::c_void;
+    fn dispatch_async_f(
+        queue: *mut std::ffi::c_void,
+        context: *mut std::ffi::c_void,
+        work: extern "C" fn(*mut std::ffi::c_void),
+    );
+}
 
 // IOKit power management bindings
 #[link(name = "IOKit", kind = "framework")]
@@ -44,7 +55,7 @@ const MODE_BOTH: u8 = 2;
 static ASSERTION_ID: AtomicU32 = AtomicU32::new(0);
 static ASSERTION_ID_2: AtomicU32 = AtomicU32::new(0);
 static TIMER_EXPIRY: AtomicU64 = AtomicU64::new(0);
-static TIMER_CANCEL: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
+static TIMER_CANCEL: Mutex<Option<Arc<(Mutex<bool>, Condvar)>>> = Mutex::new(None);
 static TIMER_THREAD: Mutex<Option<thread::JoinHandle<()>>> = Mutex::new(None);
 static CURRENT_MODE: AtomicU8 = AtomicU8::new(MODE_BOTH);
 
@@ -199,9 +210,11 @@ fn update_mode_menu_state() {
 
 fn cancel_timer() {
     if let Some(cancel) = TIMER_CANCEL.lock().unwrap().take() {
-        cancel.store(true, Ordering::Relaxed);
+        let (lock, cvar) = &*cancel;
+        *lock.lock().unwrap() = true;
+        cvar.notify_one();
     }
-    // Take and drop the old handle (don't join — it may be sleeping for a long time)
+    // Take and drop the old handle (don't join — thread will exit promptly via condvar)
     TIMER_THREAD.lock().unwrap().take();
 }
 
@@ -218,23 +231,31 @@ fn activate_for_duration(minutes: u64) {
     let expiry = now_secs() + (minutes * 60);
     TIMER_EXPIRY.store(expiry, Ordering::Release);
 
-    let cancelled = Arc::new(AtomicBool::new(false));
-    *TIMER_CANCEL.lock().unwrap() = Some(Arc::clone(&cancelled));
+    let cancel_pair = Arc::new((Mutex::new(false), Condvar::new()));
+    *TIMER_CANCEL.lock().unwrap() = Some(Arc::clone(&cancel_pair));
 
     let handle = thread::spawn(move || {
-        // Sleep in short intervals so we can check for cancellation
-        let total_secs = minutes * 60;
-        let mut elapsed = 0u64;
-        while elapsed < total_secs {
-            let chunk = (total_secs - elapsed).min(1);
-            thread::sleep(Duration::from_secs(chunk));
-            elapsed += chunk;
-            if cancelled.load(Ordering::Relaxed) {
-                return;
-            }
+        let (lock, cvar) = &*cancel_pair;
+        let duration = Duration::from_secs(minutes * 60);
+        let guard = lock.lock().unwrap();
+        // Single wait for the full duration — wakes only on cancel or expiry
+        let (guard, _timeout) = cvar.wait_timeout(guard, duration).unwrap();
+        if *guard {
+            return; // Cancelled
         }
+        drop(guard);
         if TIMER_EXPIRY.load(Ordering::Acquire) == expiry {
-            deactivate();
+            // Must dispatch to main thread — deactivate() touches AppKit UI objects
+            extern "C" fn deactivate_on_main(_ctx: *mut std::ffi::c_void) {
+                deactivate();
+            }
+            unsafe {
+                dispatch_async_f(
+                    dispatch_get_main_queue(),
+                    std::ptr::null_mut(),
+                    deactivate_on_main,
+                );
+            }
         }
     });
 
@@ -261,15 +282,25 @@ fn update_icon(symbol_name: &str) {
 }
 
 // Launch at login
-fn launch_agent_path() -> PathBuf {
-    let home = env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home)
-        .join("Library/LaunchAgents")
-        .join(format!("{}.plist", LAUNCH_AGENT_LABEL))
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+fn launch_agent_path() -> Option<PathBuf> {
+    let home = env::var("HOME").ok()?;
+    Some(
+        PathBuf::from(home)
+            .join("Library/LaunchAgents")
+            .join(format!("{}.plist", LAUNCH_AGENT_LABEL)),
+    )
 }
 
 fn is_launch_at_login() -> bool {
-    launch_agent_path().exists()
+    launch_agent_path().is_some_and(|p| p.exists())
 }
 
 fn get_app_path() -> String {
@@ -280,7 +311,10 @@ fn get_app_path() -> String {
 }
 
 fn set_launch_at_login(enable: bool) {
-    let path = launch_agent_path();
+    let Some(path) = launch_agent_path() else {
+        eprintln!("HOME not set; cannot manage launch agent");
+        return;
+    };
 
     if enable {
         let app_path = get_app_path();
@@ -311,7 +345,8 @@ fn set_launch_at_login(enable: bool) {
 </dict>
 </plist>
 "#,
-            LAUNCH_AGENT_LABEL, app_path
+            LAUNCH_AGENT_LABEL,
+            xml_escape(&app_path)
         );
 
         if let Err(e) = fs::write(&path, &plist) {

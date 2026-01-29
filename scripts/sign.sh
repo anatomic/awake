@@ -12,13 +12,13 @@ APP_PATH="${1:?Usage: sign.sh <path-to-app>}"
 ENTITLEMENTS="$(dirname "$0")/entitlements.plist"
 
 echo "==> Signing ${APP_PATH}..."
-codesign --force --deep --options runtime \
+codesign --force --options runtime \
     --entitlements "${ENTITLEMENTS}" \
     --sign "${DEVELOPER_ID_APPLICATION}" \
     "${APP_PATH}"
 
 echo "==> Verifying signature..."
-codesign --verify --deep --strict "${APP_PATH}"
+codesign --verify --strict "${APP_PATH}"
 
 echo "==> Creating ZIP for notarization..."
 ZIP_PATH="${APP_PATH%.app}.zip"
