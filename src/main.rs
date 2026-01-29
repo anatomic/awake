@@ -13,8 +13,8 @@ use core_foundation::base::TCFType;
 use core_foundation::string::CFString;
 use std::env;
 use std::fs;
-use std::path::PathBuf;
 use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -90,7 +90,10 @@ fn create_assertion(assertion_type: &str) -> u32 {
     if result == 0 {
         aid
     } else {
-        eprintln!("IOPMAssertionCreateWithName({}) failed: error {}", assertion_type, result);
+        eprintln!(
+            "IOPMAssertionCreateWithName({}) failed: error {}",
+            assertion_type, result
+        );
         0
     }
 }
@@ -139,7 +142,10 @@ fn activate() {
                 if aid2 != 0 {
                     unsafe { IOPMAssertionRelease(aid2) };
                 }
-                eprintln!("Failed to create both IOKit assertions (display={}, system={})", aid1, aid2);
+                eprintln!(
+                    "Failed to create both IOKit assertions (display={}, system={})",
+                    aid1, aid2
+                );
             }
         }
     }
@@ -244,8 +250,7 @@ fn update_icon(symbol_name: &str) {
             if !button.is_null() {
                 let name = NSString::from_str(symbol_name);
                 let desc: Option<&NSString> = None;
-                let img: Option<Retained<NSImage>> =
-                    msg_send![NSImage::class(), imageWithSystemSymbolName: &*name, accessibilityDescription: desc];
+                let img: Option<Retained<NSImage>> = msg_send![NSImage::class(), imageWithSystemSymbolName: &*name, accessibilityDescription: desc];
                 if let Some(img) = img {
                     let _: () = msg_send![&*img, setTemplate: true];
                     let _: () = msg_send![button, setImage: &*img];
@@ -386,9 +391,8 @@ extern "C" fn button_clicked(_this: *mut AnyObject, _cmd: Sel, _sender: *mut Any
             let event_type: u64 = msg_send![event, type];
             let modifier_flags: u64 = msg_send![event, modifierFlags];
             // Right mouse down (3) or right mouse up (4), or control+left click
-            let is_right_click = event_type == 3
-                || event_type == 4
-                || (modifier_flags & 0x40000) != 0;
+            let is_right_click =
+                event_type == 3 || event_type == 4 || (modifier_flags & 0x40000) != 0;
             if is_right_click {
                 let status_item_ptr = STATUS_ITEM.lock().unwrap().0;
                 let menu_ptr = STATUS_MENU.lock().unwrap().0;
@@ -492,8 +496,7 @@ fn main() {
             if !button.is_null() {
                 let name = NSString::from_str("moon.zzz.fill");
                 let desc: Option<&NSString> = None;
-                let img: Option<Retained<NSImage>> =
-                    msg_send![NSImage::class(), imageWithSystemSymbolName: &*name, accessibilityDescription: desc];
+                let img: Option<Retained<NSImage>> = msg_send![NSImage::class(), imageWithSystemSymbolName: &*name, accessibilityDescription: desc];
                 if let Some(img) = img {
                     let _: () = msg_send![&*img, setTemplate: true];
                     let _: () = msg_send![button, setImage: &*img];
@@ -523,8 +526,18 @@ fn main() {
             &empty,
         );
         let timer_submenu = NSMenu::new(mtm);
-        timer_submenu.addItem(&create_menu_item("15 minutes", sel!(timer15:), delegate, mtm));
-        timer_submenu.addItem(&create_menu_item("30 minutes", sel!(timer30:), delegate, mtm));
+        timer_submenu.addItem(&create_menu_item(
+            "15 minutes",
+            sel!(timer15:),
+            delegate,
+            mtm,
+        ));
+        timer_submenu.addItem(&create_menu_item(
+            "30 minutes",
+            sel!(timer30:),
+            delegate,
+            mtm,
+        ));
         timer_submenu.addItem(&create_menu_item("1 hour", sel!(timer60:), delegate, mtm));
         timer_submenu.addItem(&create_menu_item("2 hours", sel!(timer120:), delegate, mtm));
         timer_menu_item.setSubmenu(Some(&timer_submenu));
@@ -572,6 +585,22 @@ fn main() {
         // Separator
         let sep3 = NSMenuItem::separatorItem(mtm);
         menu.addItem(&sep3);
+
+        // About
+        let version = env!("CARGO_PKG_VERSION");
+        let about_title = NSString::from_str(&format!("Awake v{}", version));
+        let about_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &about_title,
+            None,
+            &empty,
+        );
+        let _: () = msg_send![&about_item, setEnabled: false];
+        menu.addItem(&about_item);
+
+        // Separator
+        let sep4 = NSMenuItem::separatorItem(mtm);
+        menu.addItem(&sep4);
 
         // Quit
         let quit_item = create_menu_item("Quit", sel!(quit:), delegate, mtm);

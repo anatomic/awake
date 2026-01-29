@@ -12,16 +12,13 @@ Requires **macOS 11+** (Big Sur or later) for SF Symbols support.
 
 ## Install
 
-### Homebrew (recommended)
-
 ```sh
-brew tap anatomic/awake
-brew install --cask awake
+brew install anatomic/awake/awake
 ```
 
-### Manual download
+This installs Awake as a Homebrew cask from the [anatomic/awake tap](https://github.com/anatomic/homebrew-awake). To update later, run `brew upgrade awake`.
 
-Download `Awake.zip` from the [latest release](https://github.com/anatomic/awake/releases/latest), unzip, and move `Awake.app` to `/Applications`.
+Alternatively, download `Awake.zip` from the [latest release](https://github.com/anatomic/awake/releases/latest), unzip, and move `Awake.app` to `/Applications`.
 
 ## Build from source
 
