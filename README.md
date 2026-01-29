@@ -55,6 +55,26 @@ brew uninstall --cask awake
 
 Or delete `Awake.app` from `/Applications` and remove `~/Library/LaunchAgents/io.tmss.awake.plist` if it exists.
 
+## Footprint
+
+Awake is designed to be as lightweight as possible — a single Rust binary with no runtime dependencies, no embedded frameworks, and no background helper processes.
+
+| Metric | Awake | KeepingYouAwake |
+|---|---|---|
+| App bundle size | **1.2 MB** | 7.6 MB |
+| Binary size (universal) | 731 KB | 416 KB |
+| Physical memory (active) | 18.8 MB | 26.9 MB (+ `caffeinate`) |
+| CPU usage (idle) | 0.0% | 0.0% |
+| Processes | 1 | 2 |
+| Threads | 4 | 6 |
+| Source code | **663 lines** (single file) | ~3,500 lines (Obj-C) |
+| Runtime | None (static Rust) | Objective-C runtime |
+| Sleep mechanism | IOKit power assertions (direct) | `caffeinate` subprocess |
+
+Awake calls IOKit directly to create power assertions rather than shelling out to `caffeinate`. This means no child processes, no shell overhead, and precise control over assertion types.
+
+Measurements taken on macOS 26.2, Apple Silicon. Physical memory reported by `vmmap --summary`.
+
 ## License
 
 MIT
