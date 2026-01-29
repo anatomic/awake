@@ -54,7 +54,7 @@ jobs:
 
       - name: Sign and notarize
         env:
-          DEVELOPER_ID_APPLICATION: "Developer ID Application: ${{ secrets.APPLE_TEAM_ID }}"
+          DEVELOPER_ID_APPLICATION: ${{ secrets.DEVELOPER_ID_APPLICATION }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
