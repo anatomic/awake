@@ -20,11 +20,12 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-// Grand Central Dispatch bindings for main thread dispatch
+// Grand Central Dispatch — dispatch to main thread for AppKit safety
+// `_dispatch_main_q` is the actual symbol behind the dispatch_get_main_queue() macro.
 extern "C" {
-    fn dispatch_get_main_queue() -> *mut std::ffi::c_void;
+    static _dispatch_main_q: std::ffi::c_void;
     fn dispatch_async_f(
-        queue: *mut std::ffi::c_void,
+        queue: *const std::ffi::c_void,
         context: *mut std::ffi::c_void,
         work: extern "C" fn(*mut std::ffi::c_void),
     );
@@ -252,7 +253,7 @@ fn activate_for_duration(minutes: u64) {
             }
             unsafe {
                 dispatch_async_f(
-                    dispatch_get_main_queue(),
+                    &_dispatch_main_q,
                     std::ptr::null_mut(),
                     deactivate_on_main,
                 );
