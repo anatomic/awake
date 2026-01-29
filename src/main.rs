@@ -252,11 +252,7 @@ fn activate_for_duration(minutes: u64) {
                 deactivate();
             }
             unsafe {
-                dispatch_async_f(
-                    &_dispatch_main_q,
-                    std::ptr::null_mut(),
-                    deactivate_on_main,
-                );
+                dispatch_async_f(&_dispatch_main_q, std::ptr::null_mut(), deactivate_on_main);
             }
         }
     });
