@@ -14,8 +14,8 @@ use core_foundation::string::CFString;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -43,6 +43,8 @@ const MODE_BOTH: u8 = 2;
 static ASSERTION_ID: AtomicU32 = AtomicU32::new(0);
 static ASSERTION_ID_2: AtomicU32 = AtomicU32::new(0);
 static TIMER_EXPIRY: AtomicU64 = AtomicU64::new(0);
+static TIMER_CANCEL: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
+static TIMER_THREAD: Mutex<Option<thread::JoinHandle<()>>> = Mutex::new(None);
 static CURRENT_MODE: AtomicU8 = AtomicU8::new(MODE_BOTH);
 
 // Wrapper for raw pointers to ObjC objects so they can be in statics
@@ -51,6 +53,7 @@ unsafe impl Send for RawId {}
 unsafe impl Sync for RawId {}
 
 static STATUS_ITEM: Mutex<RawId> = Mutex::new(RawId(std::ptr::null_mut()));
+static STATUS_MENU: Mutex<RawId> = Mutex::new(RawId(std::ptr::null_mut()));
 static LOGIN_ITEM: Mutex<RawId> = Mutex::new(RawId(std::ptr::null_mut()));
 static MODE_ITEMS: Mutex<[RawId; 3]> = Mutex::new([
     RawId(std::ptr::null_mut()),
@@ -172,6 +175,14 @@ fn update_mode_menu_state() {
     }
 }
 
+fn cancel_timer() {
+    if let Some(cancel) = TIMER_CANCEL.lock().unwrap().take() {
+        cancel.store(true, Ordering::Relaxed);
+    }
+    // Take and drop the old handle (don't join — it may be sleeping for a long time)
+    TIMER_THREAD.lock().unwrap().take();
+}
+
 fn activate_for_duration(minutes: u64) {
     deactivate();
     activate();
@@ -180,15 +191,32 @@ fn activate_for_duration(minutes: u64) {
         return;
     }
 
+    cancel_timer();
+
     let expiry = now_secs() + (minutes * 60);
     TIMER_EXPIRY.store(expiry, Ordering::Relaxed);
 
-    thread::spawn(move || {
-        thread::sleep(Duration::from_secs(minutes * 60));
+    let cancelled = Arc::new(AtomicBool::new(false));
+    *TIMER_CANCEL.lock().unwrap() = Some(Arc::clone(&cancelled));
+
+    let handle = thread::spawn(move || {
+        // Sleep in short intervals so we can check for cancellation
+        let total_secs = minutes * 60;
+        let mut elapsed = 0u64;
+        while elapsed < total_secs {
+            let chunk = (total_secs - elapsed).min(1);
+            thread::sleep(Duration::from_secs(chunk));
+            elapsed += chunk;
+            if cancelled.load(Ordering::Relaxed) {
+                return;
+            }
+        }
         if TIMER_EXPIRY.load(Ordering::Relaxed) == expiry {
             deactivate();
         }
     });
+
+    *TIMER_THREAD.lock().unwrap() = Some(handle);
 }
 
 fn update_icon(symbol_name: &str) {
@@ -322,8 +350,40 @@ extern "C" fn mode_both_action(_this: *mut AnyObject, _cmd: Sel, _sender: *mut A
     set_mode(MODE_BOTH);
 }
 
+extern "C" fn button_clicked(_this: *mut AnyObject, _cmd: Sel, _sender: *mut AnyObject) {
+    unsafe {
+        let mtm = MainThreadMarker::new_unchecked();
+        let app = NSApplication::sharedApplication(mtm);
+        let event: *mut AnyObject = msg_send![&app, currentEvent];
+        if !event.is_null() {
+            let event_type: u64 = msg_send![event, type];
+            let modifier_flags: u64 = msg_send![event, modifierFlags];
+            // Right mouse down (3) or right mouse up (4), or control+left click
+            let is_right_click = event_type == 3
+                || event_type == 4
+                || (modifier_flags & 0x40000) != 0;
+            if is_right_click {
+                let status_item_ptr = STATUS_ITEM.lock().unwrap().0;
+                let menu_ptr = STATUS_MENU.lock().unwrap().0;
+                if !status_item_ptr.is_null() && !menu_ptr.is_null() {
+                    let _: () = msg_send![status_item_ptr, setMenu: menu_ptr];
+                    let button: *mut AnyObject = msg_send![status_item_ptr, button];
+                    let _: () = msg_send![button, performClick: std::ptr::null::<AnyObject>()];
+                    let _: () = msg_send![status_item_ptr, setMenu: std::ptr::null::<AnyObject>()];
+                }
+                return;
+            }
+        }
+    }
+    toggle();
+}
+
 extern "C" fn quit_action(_this: *mut AnyObject, _cmd: Sel, _sender: *mut AnyObject) {
     deactivate();
+    cancel_timer();
+    if let Some(handle) = TIMER_THREAD.lock().unwrap().take() {
+        let _ = handle.join();
+    }
     unsafe {
         let mtm = MainThreadMarker::new_unchecked();
         let app = NSApplication::sharedApplication(mtm);
@@ -352,6 +412,7 @@ fn register_delegate_class() -> &'static AnyClass {
             builder.add_method(sel!(modeSystem:), mode_system_action as Fn3);
             builder.add_method(sel!(modeBoth:), mode_both_action as Fn3);
             builder.add_method(sel!(quit:), quit_action as Fn3);
+            builder.add_method(sel!(buttonClicked:), button_clicked as Fn3);
         }
 
         cls_ptr = Some(builder.register());
@@ -488,7 +549,24 @@ fn main() {
         let quit_item = create_menu_item("Quit", sel!(quit:), delegate, mtm);
         menu.addItem(&quit_item);
 
-        status_item.setMenu(Some(&menu));
+        // Store menu for right-click access (don't set it on status item —
+        // left click toggles, right click shows menu)
+        STATUS_MENU.lock().unwrap().0 = Retained::as_ptr(&menu) as *mut _;
+
+        // Set button action for left-click toggle
+        {
+            let button: *mut AnyObject = msg_send![&status_item, button];
+            if !button.is_null() {
+                let _: () = msg_send![button, setAction: sel!(buttonClicked:)];
+                let _: () = msg_send![button, setTarget: delegate];
+            }
+        }
+
+        // Send right-click events to our button handler
+        // Fire action on left mouse up and right mouse down/up
+        let mask: i64 = (1 << 2) | (1 << 3) | (1 << 4);
+        let _: () = msg_send![&status_item, sendActionOn: mask];
+
         app.run();
     }
 }
