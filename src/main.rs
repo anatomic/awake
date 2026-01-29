@@ -14,6 +14,7 @@ use core_foundation::string::CFString;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+use std::os::unix::fs::PermissionsExt;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -69,7 +70,7 @@ fn now_secs() -> u64 {
 }
 
 fn is_awake() -> bool {
-    ASSERTION_ID.load(Ordering::Relaxed) != 0
+    ASSERTION_ID.load(Ordering::Acquire) != 0
 }
 
 fn create_assertion(assertion_type: &str) -> u32 {
@@ -86,13 +87,21 @@ fn create_assertion(assertion_type: &str) -> u32 {
         )
     };
 
-    if result == 0 { aid } else { 0 }
+    if result == 0 {
+        aid
+    } else {
+        eprintln!("IOPMAssertionCreateWithName({}) failed: error {}", assertion_type, result);
+        0
+    }
 }
 
 fn release_assertion(id: &AtomicU32) {
-    let aid = id.swap(0, Ordering::Relaxed);
+    let aid = id.swap(0, Ordering::AcqRel);
     if aid != 0 {
-        unsafe { IOPMAssertionRelease(aid) };
+        let result = unsafe { IOPMAssertionRelease(aid) };
+        if result != 0 {
+            eprintln!("IOPMAssertionRelease failed: error {}", result);
+        }
     }
 }
 
@@ -107,23 +116,30 @@ fn activate() {
         MODE_DISPLAY => {
             let aid = create_assertion("PreventUserIdleDisplaySleep");
             if aid != 0 {
-                ASSERTION_ID.store(aid, Ordering::Relaxed);
+                ASSERTION_ID.store(aid, Ordering::Release);
             }
         }
         MODE_SYSTEM => {
             let aid = create_assertion("PreventUserIdleSystemSleep");
             if aid != 0 {
-                ASSERTION_ID.store(aid, Ordering::Relaxed);
+                ASSERTION_ID.store(aid, Ordering::Release);
             }
         }
         MODE_BOTH | _ => {
             let aid1 = create_assertion("PreventUserIdleDisplaySleep");
             let aid2 = create_assertion("PreventUserIdleSystemSleep");
-            if aid1 != 0 {
-                ASSERTION_ID.store(aid1, Ordering::Relaxed);
-            }
-            if aid2 != 0 {
-                ASSERTION_ID_2.store(aid2, Ordering::Relaxed);
+            if aid1 != 0 && aid2 != 0 {
+                ASSERTION_ID.store(aid1, Ordering::Release);
+                ASSERTION_ID_2.store(aid2, Ordering::Release);
+            } else {
+                // Roll back on partial failure
+                if aid1 != 0 {
+                    unsafe { IOPMAssertionRelease(aid1) };
+                }
+                if aid2 != 0 {
+                    unsafe { IOPMAssertionRelease(aid2) };
+                }
+                eprintln!("Failed to create both IOKit assertions (display={}, system={})", aid1, aid2);
             }
         }
     }
@@ -134,7 +150,7 @@ fn activate() {
 }
 
 fn deactivate() {
-    TIMER_EXPIRY.store(0, Ordering::Relaxed);
+    TIMER_EXPIRY.store(0, Ordering::Release);
     release_assertion(&ASSERTION_ID);
     release_assertion(&ASSERTION_ID_2);
     update_icon("moon.zzz.fill");
@@ -194,7 +210,7 @@ fn activate_for_duration(minutes: u64) {
     cancel_timer();
 
     let expiry = now_secs() + (minutes * 60);
-    TIMER_EXPIRY.store(expiry, Ordering::Relaxed);
+    TIMER_EXPIRY.store(expiry, Ordering::Release);
 
     let cancelled = Arc::new(AtomicBool::new(false));
     *TIMER_CANCEL.lock().unwrap() = Some(Arc::clone(&cancelled));
@@ -211,7 +227,7 @@ fn activate_for_duration(minutes: u64) {
                 return;
             }
         }
-        if TIMER_EXPIRY.load(Ordering::Relaxed) == expiry {
+        if TIMER_EXPIRY.load(Ordering::Acquire) == expiry {
             deactivate();
         }
     });
@@ -268,7 +284,10 @@ fn set_launch_at_login(enable: bool) {
         }
 
         if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
+            if let Err(e) = fs::create_dir_all(parent) {
+                eprintln!("Failed to create LaunchAgents directory: {}", e);
+                return;
+            }
         }
 
         let plist = format!(
@@ -290,9 +309,17 @@ fn set_launch_at_login(enable: bool) {
             LAUNCH_AGENT_LABEL, app_path
         );
 
-        let _ = fs::write(&path, plist);
-    } else {
-        let _ = fs::remove_file(&path);
+        if let Err(e) = fs::write(&path, &plist) {
+            eprintln!("Failed to write LaunchAgent plist: {}", e);
+            return;
+        }
+        if let Err(e) = fs::set_permissions(&path, fs::Permissions::from_mode(0o644)) {
+            eprintln!("Failed to set plist permissions: {}", e);
+        }
+    } else if let Err(e) = fs::remove_file(&path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            eprintln!("Failed to remove LaunchAgent plist: {}", e);
+        }
     }
 
     update_login_item_state();
@@ -397,7 +424,8 @@ fn register_delegate_class() -> &'static AnyClass {
 
     REGISTER.call_once(|| {
         let superclass = objc2::class!(NSObject);
-        let mut builder = ClassBuilder::new(c"AwakeDelegate", superclass).unwrap();
+        let mut builder = ClassBuilder::new(c"AwakeDelegate", superclass)
+            .expect("AwakeDelegate class already registered");
 
         type Fn3 = extern "C" fn(*mut AnyObject, Sel, *mut AnyObject);
 

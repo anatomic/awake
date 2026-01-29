@@ -5,6 +5,10 @@ edition = "2021"
 description = "A macOS menu bar app to prevent system sleep"
 authors = ["Ian Thomas"]
 license = "MIT"
+repository = "https://github.com/anatomic/awake"
+homepage = "https://github.com/anatomic/awake"
+keywords = ["macos", "sleep", "menubar", "caffeine"]
+categories = ["os::macos-apis"]
 
 [dependencies]
 objc2 = "0.6"

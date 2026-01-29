@@ -2,6 +2,14 @@
 
 A macOS menu bar app to prevent system sleep. Lightweight, native, no dependencies.
 
+- **Modes**: Prevent display sleep, system sleep, or both
+- **Timers**: Auto-deactivate after 15 min, 30 min, 1 hour, or 2 hours
+- **Launch at Login**: Optional LaunchAgent integration
+- **Interaction**: Left-click to toggle, right-click for menu
+- **Tiny**: Single binary, ~1 MB universal (arm64 + x86_64)
+
+Requires **macOS 11+** (Big Sur or later) for SF Symbols support.
+
 ## Install
 
 ### Homebrew (recommended)
