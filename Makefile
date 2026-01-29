@@ -4,7 +4,7 @@ BUNDLE := $(APP_NAME).app
 BUILD_DIR := target
 UNIVERSAL_DIR := $(BUILD_DIR)/universal/release
 
-.PHONY: all clean build-arm64 build-x86_64 universal bundle package sign
+.PHONY: all clean build-arm64 build-x86_64 universal bundle package sign setup
 
 all: package
 
@@ -40,3 +40,6 @@ package: bundle
 	rm -f $(APP_NAME).zip
 	ditto -c -k --keepParent $(BUNDLE) $(APP_NAME).zip
 	@echo "Built $(APP_NAME).zip (version $(VERSION))"
+
+setup:
+	git config core.hooksPath .githooks
