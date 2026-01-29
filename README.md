@@ -48,7 +48,7 @@ Launch Awake and it appears in your menu bar. Click the icon to:
 brew uninstall --cask awake
 ```
 
-Or delete `Awake.app` from `/Applications` and remove `~/Library/LaunchAgents/com.anatomic.awake.plist` if it exists.
+Or delete `Awake.app` from `/Applications` and remove `~/Library/LaunchAgents/io.tmss.awake.plist` if it exists.
 
 ## License
 

@@ -32,7 +32,7 @@ extern "C" {
 }
 
 const IOPM_ASSERTION_LEVEL_ON: u32 = 255;
-const LAUNCH_AGENT_LABEL: &str = "com.awake.app";
+const LAUNCH_AGENT_LABEL: &str = "io.tmss.awake";
 
 // Sleep prevention modes
 const MODE_DISPLAY: u8 = 0;

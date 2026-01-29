@@ -65,11 +65,6 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: ./scripts/sign.sh "${{ env.APP_NAME }}.app"
 
-      - name: Create release ZIP
-        run: |
-          rm -f "${{ env.APP_NAME }}.zip"
-          ditto -c -k --keepParent "${{ env.APP_NAME }}.app" "${{ env.APP_NAME }}.zip"
-
       - name: Calculate SHA256
         id: sha
         run: |
@@ -107,7 +102,7 @@ jobs:
             app "Awake.app"
 
             zap trash: [
-              "~/Library/LaunchAgents/com.anatomic.awake.plist",
+              "~/Library/LaunchAgents/io.tmss.awake.plist",
             ]
           end
           EOF

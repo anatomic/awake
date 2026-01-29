@@ -7,7 +7,7 @@
     <key>CFBundleDisplayName</key>
     <string>Awake</string>
     <key>CFBundleIdentifier</key>
-    <string>com.anatomic.awake</string>
+    <string>io.tmss.awake</string>
     <key>CFBundleVersion</key>
     <string>{{VERSION}}</string>
     <key>CFBundleShortVersionString</key>
