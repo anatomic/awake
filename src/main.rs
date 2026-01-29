@@ -139,7 +139,7 @@ fn activate() {
                 ASSERTION_ID.store(aid, Ordering::Release);
             }
         }
-        MODE_BOTH | _ => {
+        _ => {
             let aid1 = create_assertion("PreventUserIdleDisplaySleep");
             let aid2 = create_assertion("PreventUserIdleSystemSleep");
             if aid1 != 0 && aid2 != 0 {
@@ -350,7 +350,7 @@ fn set_launch_at_login(enable: bool) {
             xml_escape(&app_path)
         );
 
-        if let Err(e) = fs::write(&path, &plist) {
+        if let Err(e) = fs::write(&path, plist) {
             eprintln!("Failed to write LaunchAgent plist: {}", e);
             return;
         }
@@ -447,7 +447,8 @@ extern "C" fn button_clicked(_this: *mut AnyObject, _cmd: Sel, _sender: *mut Any
 
 extern "C" fn quit_action(_this: *mut AnyObject, _cmd: Sel, _sender: *mut AnyObject) {
     deactivate();
-    cancel_timer();
+    // deactivate() calls cancel_timer(), so the thread is already signalled.
+    // Join it to ensure clean shutdown before terminating the app.
     if let Some(handle) = TIMER_THREAD.lock().unwrap().take() {
         let _ = handle.join();
     }
