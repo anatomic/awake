@@ -15,10 +15,10 @@ jobs:
   release:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be9e76fd7c4901c61fb841f559994984270fce7 # stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
@@ -72,10 +72,16 @@ jobs:
           echo "sha256=$sha" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2
         with:
           files: ${{ env.APP_NAME }}.zip
           generate_release_notes: true
+          append_body: true
+          body: |
+            ## Verification
+            ```
+            sha256  ${{ steps.sha.outputs.sha256 }}  Awake.zip
+            ```
 
       - name: Update Homebrew tap
         env:
@@ -85,7 +91,11 @@ jobs:
           SHA256="${{ steps.sha.outputs.sha256 }}"
           URL="https://github.com/anatomic/awake/releases/download/v${VERSION}/Awake.zip"
 
-          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/anatomic/homebrew-awake.git" /tmp/homebrew-awake
+          # Use GIT_ASKPASS to avoid embedding token in clone URL (prevents log exposure)
+          export GIT_ASKPASS="$RUNNER_TEMP/git-askpass.sh"
+          printf '#!/bin/sh\necho "%s"\n' "${HOMEBREW_TAP_TOKEN}" > "$GIT_ASKPASS"
+          chmod +x "$GIT_ASKPASS"
+          git clone "https://x-access-token@github.com/anatomic/homebrew-awake.git" /tmp/homebrew-awake
           cd /tmp/homebrew-awake
 
           mkdir -p Casks
@@ -115,3 +125,10 @@ jobs:
           git add Casks/awake.rb
           git commit -m "Update awake to ${VERSION}"
           git push
+
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/DeveloperIDG2CA.cer"
