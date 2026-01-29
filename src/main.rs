@@ -128,7 +128,7 @@ fn activate() {
                 ASSERTION_ID.store(aid, Ordering::Release);
             }
         }
-        MODE_BOTH | _ => {
+        _ => {
             let aid1 = create_assertion("PreventUserIdleDisplaySleep");
             let aid2 = create_assertion("PreventUserIdleSystemSleep");
             if aid1 != 0 && aid2 != 0 {

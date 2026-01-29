@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Awake is a macOS menu bar app that prevents system sleep. Written in Rust using native macOS frameworks (IOKit for power assertions, AppKit for UI). Single-file implementation (~600 lines in `src/main.rs`). Targets macOS 11+, ships as a universal binary (arm64 + x86_64).
 
+## Setup
+
+After cloning, run `make setup` to configure git hooks (runs `cargo fmt --check` and `cargo clippy` before each commit).
+
 ## Build Commands
 
 ```bash
