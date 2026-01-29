@@ -55,7 +55,8 @@ const MODE_BOTH: u8 = 2;
 static ASSERTION_ID: AtomicU32 = AtomicU32::new(0);
 static ASSERTION_ID_2: AtomicU32 = AtomicU32::new(0);
 static TIMER_EXPIRY: AtomicU64 = AtomicU64::new(0);
-static TIMER_CANCEL: Mutex<Option<Arc<(Mutex<bool>, Condvar)>>> = Mutex::new(None);
+type TimerCancel = Arc<(Mutex<bool>, Condvar)>;
+static TIMER_CANCEL: Mutex<Option<TimerCancel>> = Mutex::new(None);
 static TIMER_THREAD: Mutex<Option<thread::JoinHandle<()>>> = Mutex::new(None);
 static CURRENT_MODE: AtomicU8 = AtomicU8::new(MODE_BOTH);
 
