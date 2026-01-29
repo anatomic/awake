@@ -21,7 +21,6 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 // Grand Central Dispatch bindings for main thread dispatch
-#[link(name = "System", kind = "dylib")]
 extern "C" {
     fn dispatch_get_main_queue() -> *mut std::ffi::c_void;
     fn dispatch_async_f(
