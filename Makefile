@@ -24,7 +24,7 @@ universal: build-arm64 build-x86_64
 		$(BUILD_DIR)/aarch64-apple-darwin/release/awake \
 		$(BUILD_DIR)/x86_64-apple-darwin/release/awake \
 		-output $(UNIVERSAL_DIR)/awake
-	lipo -verify_arch arm64 x86_64 $(UNIVERSAL_DIR)/awake
+	lipo $(UNIVERSAL_DIR)/awake -verify_arch arm64 x86_64
 
 bundle: universal
 	mkdir -p $(BUNDLE)/Contents/MacOS
