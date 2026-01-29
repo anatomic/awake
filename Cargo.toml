@@ -7,8 +7,9 @@ authors = ["Your Name"]
 license = "MIT"
 
 [dependencies]
-cocoa = "0.26"
-objc = "0.2"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSMenu", "NSMenuItem", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSControl", "NSButton", "NSCell", "NSImage"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSThread"] }
 core-foundation = "0.10"
 
 [profile.release]

@@ -1,23 +1,21 @@
 //! Awake - Ultra-lightweight macOS menu bar app to prevent sleep
 //! Uses IOKit power assertions directly (no child processes)
 
-#[macro_use]
-extern crate objc;
-
-use cocoa::appkit::{
-    NSApp, NSApplication, NSApplicationActivationPolicy, NSMenu, NSMenuItem, NSStatusBar,
-    NSStatusItem, NSVariableStatusItemLength,
+use objc2::rc::Retained;
+use objc2::runtime::{AnyClass, AnyObject, ClassBuilder, Sel};
+use objc2::{msg_send, sel, ClassType, MainThreadMarker, MainThreadOnly};
+use objc2_app_kit::{
+    NSApplication, NSApplicationActivationPolicy, NSImage, NSMenu, NSMenuItem, NSStatusBar,
 };
-use cocoa::base::{id, nil, selector, BOOL, NO, YES};
-use cocoa::foundation::{NSAutoreleasePool, NSString};
+use objc2_foundation::NSString;
+
 use core_foundation::base::TCFType;
 use core_foundation::string::CFString;
-use objc::declare::ClassDecl;
-use objc::runtime::{Class, Object, Sel};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -37,19 +35,28 @@ const IOPM_ASSERTION_LEVEL_ON: u32 = 255;
 const LAUNCH_AGENT_LABEL: &str = "com.awake.app";
 
 // Sleep prevention modes
-const MODE_DISPLAY: u8 = 0; // Prevent display sleep
-const MODE_SYSTEM: u8 = 1; // Prevent system idle sleep
-const MODE_BOTH: u8 = 2; // Prevent both (default)
+const MODE_DISPLAY: u8 = 0;
+const MODE_SYSTEM: u8 = 1;
+const MODE_BOTH: u8 = 2;
 
 // Global state
 static ASSERTION_ID: AtomicU32 = AtomicU32::new(0);
-static ASSERTION_ID_2: AtomicU32 = AtomicU32::new(0); // Second assertion for MODE_BOTH
+static ASSERTION_ID_2: AtomicU32 = AtomicU32::new(0);
 static TIMER_EXPIRY: AtomicU64 = AtomicU64::new(0);
 static CURRENT_MODE: AtomicU8 = AtomicU8::new(MODE_BOTH);
 
-static mut STATUS_ITEM: Option<id> = None;
-static mut LOGIN_ITEM: Option<id> = None;
-static mut MODE_ITEMS: [Option<id>; 3] = [None, None, None];
+// Wrapper for raw pointers to ObjC objects so they can be in statics
+struct RawId(*mut AnyObject);
+unsafe impl Send for RawId {}
+unsafe impl Sync for RawId {}
+
+static STATUS_ITEM: Mutex<RawId> = Mutex::new(RawId(std::ptr::null_mut()));
+static LOGIN_ITEM: Mutex<RawId> = Mutex::new(RawId(std::ptr::null_mut()));
+static MODE_ITEMS: Mutex<[RawId; 3]> = Mutex::new([
+    RawId(std::ptr::null_mut()),
+    RawId(std::ptr::null_mut()),
+    RawId(std::ptr::null_mut()),
+]);
 
 fn now_secs() -> u64 {
     SystemTime::now()
@@ -76,11 +83,7 @@ fn create_assertion(assertion_type: &str) -> u32 {
         )
     };
 
-    if result == 0 {
-        aid
-    } else {
-        0
-    }
+    if result == 0 { aid } else { 0 }
 }
 
 fn release_assertion(id: &AtomicU32) {
@@ -123,7 +126,7 @@ fn activate() {
     }
 
     if is_awake() {
-        update_title("☕");
+        update_icon("cup.and.saucer.fill");
     }
 }
 
@@ -131,7 +134,7 @@ fn deactivate() {
     TIMER_EXPIRY.store(0, Ordering::Relaxed);
     release_assertion(&ASSERTION_ID);
     release_assertion(&ASSERTION_ID_2);
-    update_title("😴");
+    update_icon("moon.zzz.fill");
 }
 
 fn toggle() {
@@ -158,11 +161,12 @@ fn set_mode(mode: u8) {
 
 fn update_mode_menu_state() {
     let current = CURRENT_MODE.load(Ordering::Relaxed);
-    unsafe {
-        for (i, item) in MODE_ITEMS.iter().enumerate() {
-            if let Some(menu_item) = *item {
-                let state: BOOL = if i as u8 == current { YES } else { NO };
-                let _: () = msg_send![menu_item, setState: state];
+    let items = MODE_ITEMS.lock().unwrap();
+    for (i, item) in items.iter().enumerate() {
+        if !item.0.is_null() {
+            let state: isize = if i as u8 == current { 1 } else { 0 };
+            unsafe {
+                let _: () = msg_send![item.0, setState: state];
             }
         }
     }
@@ -187,12 +191,22 @@ fn activate_for_duration(minutes: u64) {
     });
 }
 
-fn update_title(title: &str) {
-    unsafe {
-        if let Some(status_item) = STATUS_ITEM {
-            let button: id = msg_send![status_item, button];
-            let title_str = NSString::alloc(nil).init_str(title);
-            let _: () = msg_send![button, setTitle: title_str];
+fn update_icon(symbol_name: &str) {
+    let guard = STATUS_ITEM.lock().unwrap();
+    let si = guard.0;
+    if !si.is_null() {
+        unsafe {
+            let button: *mut AnyObject = msg_send![si, button];
+            if !button.is_null() {
+                let name = NSString::from_str(symbol_name);
+                let desc: Option<&NSString> = None;
+                let img: Option<Retained<NSImage>> =
+                    msg_send![NSImage::class(), imageWithSystemSymbolName: &*name, accessibilityDescription: desc];
+                if let Some(img) = img {
+                    let _: () = msg_send![&*img, setTemplate: true];
+                    let _: () = msg_send![button, setImage: &*img];
+                }
+            }
         }
     }
 }
@@ -261,209 +275,220 @@ fn toggle_launch_at_login() {
 }
 
 fn update_login_item_state() {
-    unsafe {
-        if let Some(item) = LOGIN_ITEM {
-            let state: BOOL = if is_launch_at_login() { YES } else { NO };
+    let guard = LOGIN_ITEM.lock().unwrap();
+    let item = guard.0;
+    if !item.is_null() {
+        let state: isize = if is_launch_at_login() { 1 } else { 0 };
+        unsafe {
             let _: () = msg_send![item, setState: state];
         }
     }
 }
 
 // Action handlers
-extern "C" fn toggle_action(_this: &Object, _cmd: Sel, _sender: id) {
+extern "C" fn toggle_action(_this: *mut AnyObject, _cmd: Sel, _sender: *mut AnyObject) {
     toggle();
 }
 
-extern "C" fn login_action(_this: &Object, _cmd: Sel, _sender: id) {
+extern "C" fn login_action(_this: *mut AnyObject, _cmd: Sel, _sender: *mut AnyObject) {
     toggle_launch_at_login();
 }
 
-extern "C" fn timer_15_action(_this: &Object, _cmd: Sel, _sender: id) {
+extern "C" fn timer_15_action(_this: *mut AnyObject, _cmd: Sel, _sender: *mut AnyObject) {
     activate_for_duration(15);
 }
 
-extern "C" fn timer_30_action(_this: &Object, _cmd: Sel, _sender: id) {
+extern "C" fn timer_30_action(_this: *mut AnyObject, _cmd: Sel, _sender: *mut AnyObject) {
     activate_for_duration(30);
 }
 
-extern "C" fn timer_60_action(_this: &Object, _cmd: Sel, _sender: id) {
+extern "C" fn timer_60_action(_this: *mut AnyObject, _cmd: Sel, _sender: *mut AnyObject) {
     activate_for_duration(60);
 }
 
-extern "C" fn timer_120_action(_this: &Object, _cmd: Sel, _sender: id) {
+extern "C" fn timer_120_action(_this: *mut AnyObject, _cmd: Sel, _sender: *mut AnyObject) {
     activate_for_duration(120);
 }
 
-extern "C" fn mode_display_action(_this: &Object, _cmd: Sel, _sender: id) {
+extern "C" fn mode_display_action(_this: *mut AnyObject, _cmd: Sel, _sender: *mut AnyObject) {
     set_mode(MODE_DISPLAY);
 }
 
-extern "C" fn mode_system_action(_this: &Object, _cmd: Sel, _sender: id) {
+extern "C" fn mode_system_action(_this: *mut AnyObject, _cmd: Sel, _sender: *mut AnyObject) {
     set_mode(MODE_SYSTEM);
 }
 
-extern "C" fn mode_both_action(_this: &Object, _cmd: Sel, _sender: id) {
+extern "C" fn mode_both_action(_this: *mut AnyObject, _cmd: Sel, _sender: *mut AnyObject) {
     set_mode(MODE_BOTH);
 }
 
-extern "C" fn quit_action(_this: &Object, _cmd: Sel, _sender: id) {
+extern "C" fn quit_action(_this: *mut AnyObject, _cmd: Sel, _sender: *mut AnyObject) {
     deactivate();
     unsafe {
-        let app = NSApp();
-        let _: () = msg_send![app, terminate: nil];
+        let mtm = MainThreadMarker::new_unchecked();
+        let app = NSApplication::sharedApplication(mtm);
+        let _: () = msg_send![&app, terminate: std::ptr::null::<AnyObject>()];
     }
 }
 
-fn register_delegate_class() -> *const Class {
-    let superclass = class!(NSObject);
-    let mut decl = ClassDecl::new("AwakeDelegate", superclass).unwrap();
+fn register_delegate_class() -> &'static AnyClass {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    let mut cls_ptr: Option<&'static AnyClass> = None;
 
-    unsafe {
-        decl.add_method(
-            selector("toggle:"),
-            toggle_action as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            selector("toggleLogin:"),
-            login_action as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            selector("timer15:"),
-            timer_15_action as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            selector("timer30:"),
-            timer_30_action as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            selector("timer60:"),
-            timer_60_action as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            selector("timer120:"),
-            timer_120_action as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            selector("modeDisplay:"),
-            mode_display_action as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            selector("modeSystem:"),
-            mode_system_action as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            selector("modeBoth:"),
-            mode_both_action as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            selector("quit:"),
-            quit_action as extern "C" fn(&Object, Sel, id),
-        );
+    REGISTER.call_once(|| {
+        let superclass = objc2::class!(NSObject);
+        let mut builder = ClassBuilder::new(c"AwakeDelegate", superclass).unwrap();
+
+        type Fn3 = extern "C" fn(*mut AnyObject, Sel, *mut AnyObject);
+
+        unsafe {
+            builder.add_method(sel!(toggle:), toggle_action as Fn3);
+            builder.add_method(sel!(toggleLogin:), login_action as Fn3);
+            builder.add_method(sel!(timer15:), timer_15_action as Fn3);
+            builder.add_method(sel!(timer30:), timer_30_action as Fn3);
+            builder.add_method(sel!(timer60:), timer_60_action as Fn3);
+            builder.add_method(sel!(timer120:), timer_120_action as Fn3);
+            builder.add_method(sel!(modeDisplay:), mode_display_action as Fn3);
+            builder.add_method(sel!(modeSystem:), mode_system_action as Fn3);
+            builder.add_method(sel!(modeBoth:), mode_both_action as Fn3);
+            builder.add_method(sel!(quit:), quit_action as Fn3);
+        }
+
+        cls_ptr = Some(builder.register());
+    });
+
+    if let Some(c) = cls_ptr {
+        c
+    } else {
+        AnyClass::get(c"AwakeDelegate").unwrap()
     }
-
-    decl.register()
 }
 
-fn create_menu_item(title: &str, action: Sel, delegate: id) -> id {
+fn create_menu_item(
+    title: &str,
+    action: Sel,
+    delegate: *mut AnyObject,
+    mtm: MainThreadMarker,
+) -> Retained<NSMenuItem> {
     unsafe {
-        let title_str = NSString::alloc(nil).init_str(title);
-        let item = NSMenuItem::alloc(nil).initWithTitle_action_keyEquivalent_(
-            title_str,
-            action,
-            NSString::alloc(nil).init_str(""),
+        let title_str = NSString::from_str(title);
+        let empty = NSString::from_str("");
+        let item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &title_str,
+            Some(action),
+            &empty,
         );
-        let _: () = msg_send![item, setTarget: delegate];
+        let _: () = msg_send![&item, setTarget: delegate];
         item
     }
 }
 
 fn main() {
-    unsafe {
-        let _pool = NSAutoreleasePool::new(nil);
+    let mtm = MainThreadMarker::new().expect("must run on main thread");
 
-        let app = NSApp();
-        app.setActivationPolicy_(
-            NSApplicationActivationPolicy::NSApplicationActivationPolicyAccessory,
-        );
+    unsafe {
+        let app = NSApplication::sharedApplication(mtm);
+        app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 
         let delegate_class = register_delegate_class();
-        let delegate: id = msg_send![delegate_class, new];
+        let delegate: *mut AnyObject = msg_send![delegate_class, new];
 
-        let status_bar = NSStatusBar::systemStatusBar(nil);
-        let status_item = status_bar.statusItemWithLength_(NSVariableStatusItemLength);
-        STATUS_ITEM = Some(status_item);
+        let status_bar = NSStatusBar::systemStatusBar();
+        let status_item = status_bar.statusItemWithLength(-1.0); // NSVariableStatusItemLength
 
-        let button: id = msg_send![status_item, button];
-        let title = NSString::alloc(nil).init_str("😴");
-        let _: () = msg_send![button, setTitle: title];
+        // Set initial icon
+        {
+            let button: *mut AnyObject = msg_send![&status_item, button];
+            if !button.is_null() {
+                let name = NSString::from_str("moon.zzz.fill");
+                let desc: Option<&NSString> = None;
+                let img: Option<Retained<NSImage>> =
+                    msg_send![NSImage::class(), imageWithSystemSymbolName: &*name, accessibilityDescription: desc];
+                if let Some(img) = img {
+                    let _: () = msg_send![&*img, setTemplate: true];
+                    let _: () = msg_send![button, setImage: &*img];
+                }
+            }
+        }
 
-        let menu = NSMenu::new(nil).autorelease();
+        STATUS_ITEM.lock().unwrap().0 = Retained::as_ptr(&status_item) as *mut _;
+
+        let menu = NSMenu::new(mtm);
 
         // Toggle
-        menu.addItem_(create_menu_item("Toggle", selector("toggle:"), delegate));
+        let toggle_item = create_menu_item("Toggle", sel!(toggle:), delegate, mtm);
+        menu.addItem(&toggle_item);
 
         // Separator
-        let sep: id = msg_send![class!(NSMenuItem), separatorItem];
-        menu.addItem_(sep);
+        let sep = NSMenuItem::separatorItem(mtm);
+        menu.addItem(&sep);
 
         // Timer submenu
-        let timer_title = NSString::alloc(nil).init_str("Awake For...");
-        let timer_menu_item = NSMenuItem::alloc(nil).initWithTitle_action_keyEquivalent_(
-            timer_title,
-            selector(""),
-            NSString::alloc(nil).init_str(""),
+        let timer_title = NSString::from_str("Awake For...");
+        let empty = NSString::from_str("");
+        let timer_menu_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &timer_title,
+            None,
+            &empty,
         );
-        let timer_submenu = NSMenu::new(nil).autorelease();
-        timer_submenu.addItem_(create_menu_item("15 minutes", selector("timer15:"), delegate));
-        timer_submenu.addItem_(create_menu_item("30 minutes", selector("timer30:"), delegate));
-        timer_submenu.addItem_(create_menu_item("1 hour", selector("timer60:"), delegate));
-        timer_submenu.addItem_(create_menu_item("2 hours", selector("timer120:"), delegate));
-        let _: () = msg_send![timer_menu_item, setSubmenu: timer_submenu];
-        menu.addItem_(timer_menu_item);
+        let timer_submenu = NSMenu::new(mtm);
+        timer_submenu.addItem(&create_menu_item("15 minutes", sel!(timer15:), delegate, mtm));
+        timer_submenu.addItem(&create_menu_item("30 minutes", sel!(timer30:), delegate, mtm));
+        timer_submenu.addItem(&create_menu_item("1 hour", sel!(timer60:), delegate, mtm));
+        timer_submenu.addItem(&create_menu_item("2 hours", sel!(timer120:), delegate, mtm));
+        timer_menu_item.setSubmenu(Some(&timer_submenu));
+        menu.addItem(&timer_menu_item);
 
         // Mode submenu
-        let mode_title = NSString::alloc(nil).init_str("Mode");
-        let mode_menu_item = NSMenuItem::alloc(nil).initWithTitle_action_keyEquivalent_(
-            mode_title,
-            selector(""),
-            NSString::alloc(nil).init_str(""),
+        let mode_title = NSString::from_str("Mode");
+        let mode_menu_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &mode_title,
+            None,
+            &empty,
         );
-        let mode_submenu = NSMenu::new(nil).autorelease();
+        let mode_submenu = NSMenu::new(mtm);
 
-        let mode_display = create_menu_item("Display Only", selector("modeDisplay:"), delegate);
-        let mode_system = create_menu_item("System Only", selector("modeSystem:"), delegate);
-        let mode_both = create_menu_item("Display + System", selector("modeBoth:"), delegate);
+        let mode_display = create_menu_item("Display Only", sel!(modeDisplay:), delegate, mtm);
+        let mode_system = create_menu_item("System Only", sel!(modeSystem:), delegate, mtm);
+        let mode_both = create_menu_item("Display + System", sel!(modeBoth:), delegate, mtm);
 
-        MODE_ITEMS[MODE_DISPLAY as usize] = Some(mode_display);
-        MODE_ITEMS[MODE_SYSTEM as usize] = Some(mode_system);
-        MODE_ITEMS[MODE_BOTH as usize] = Some(mode_both);
+        {
+            let mut items = MODE_ITEMS.lock().unwrap();
+            items[MODE_DISPLAY as usize].0 = Retained::as_ptr(&mode_display) as *mut _;
+            items[MODE_SYSTEM as usize].0 = Retained::as_ptr(&mode_system) as *mut _;
+            items[MODE_BOTH as usize].0 = Retained::as_ptr(&mode_both) as *mut _;
+        }
 
-        mode_submenu.addItem_(mode_display);
-        mode_submenu.addItem_(mode_system);
-        mode_submenu.addItem_(mode_both);
+        mode_submenu.addItem(&mode_display);
+        mode_submenu.addItem(&mode_system);
+        mode_submenu.addItem(&mode_both);
 
-        let _: () = msg_send![mode_menu_item, setSubmenu: mode_submenu];
-        menu.addItem_(mode_menu_item);
+        mode_menu_item.setSubmenu(Some(&mode_submenu));
+        menu.addItem(&mode_menu_item);
         update_mode_menu_state();
 
         // Separator
-        let sep2: id = msg_send![class!(NSMenuItem), separatorItem];
-        menu.addItem_(sep2);
+        let sep2 = NSMenuItem::separatorItem(mtm);
+        menu.addItem(&sep2);
 
         // Launch at Login
-        let login_item = create_menu_item("Launch at Login", selector("toggleLogin:"), delegate);
-        LOGIN_ITEM = Some(login_item);
-        menu.addItem_(login_item);
+        let login_item = create_menu_item("Launch at Login", sel!(toggleLogin:), delegate, mtm);
+        LOGIN_ITEM.lock().unwrap().0 = Retained::as_ptr(&login_item) as *mut _;
+        menu.addItem(&login_item);
         update_login_item_state();
 
         // Separator
-        let sep3: id = msg_send![class!(NSMenuItem), separatorItem];
-        menu.addItem_(sep3);
+        let sep3 = NSMenuItem::separatorItem(mtm);
+        menu.addItem(&sep3);
 
         // Quit
-        menu.addItem_(create_menu_item("Quit", selector("quit:"), delegate));
+        let quit_item = create_menu_item("Quit", sel!(quit:), delegate, mtm);
+        menu.addItem(&quit_item);
 
-        status_item.setMenu_(menu);
+        status_item.setMenu(Some(&menu));
         app.run();
     }
 }

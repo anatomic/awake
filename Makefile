@@ -30,6 +30,7 @@ bundle: universal
 	mkdir -p $(BUNDLE)/Contents/Resources
 	cp $(UNIVERSAL_DIR)/awake $(BUNDLE)/Contents/MacOS/awake
 	sed 's/{{VERSION}}/$(VERSION)/g' scripts/Info.plist > $(BUNDLE)/Contents/Info.plist
+	cp resources/AppIcon.icns $(BUNDLE)/Contents/Resources/AppIcon.icns
 
 sign: bundle
 	./scripts/sign.sh $(BUNDLE)

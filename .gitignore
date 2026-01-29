@@ -25,3 +25,6 @@ debug/
 # Environment
 .env
 .env.local
+
+# Certificates
+certs/
