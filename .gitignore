@@ -26,5 +26,9 @@ debug/
 .env
 .env.local
 
+# Claude / Beads
+.beads/
+.claude/
+
 # Certificates
 certs/

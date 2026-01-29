@@ -3,7 +3,7 @@ name = "awake"
 version = "0.1.0"
 edition = "2021"
 description = "A macOS menu bar app to prevent system sleep"
-authors = ["Your Name"]
+authors = ["Ian Thomas"]
 license = "MIT"
 
 [dependencies]
