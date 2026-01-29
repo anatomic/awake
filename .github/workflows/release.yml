@@ -43,9 +43,14 @@ jobs:
 
           echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$CERT_PATH"
 
+          # Install Apple Developer ID intermediate certificate (G2)
+          curl -sL "https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer" \
+              -o "$RUNNER_TEMP/DeveloperIDG2CA.cer"
+
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$KEYCHAIN_PATH"
           security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" \
               -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
           security set-key-partition-list -S apple-tool:,apple: \
