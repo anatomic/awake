@@ -20,3 +20,4 @@ core-foundation = "0.10"
 strip = true
 lto = true
 codegen-units = 1
+panic = "abort"

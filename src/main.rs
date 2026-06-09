@@ -51,6 +51,13 @@ const MODE_DISPLAY: u8 = 0;
 const MODE_SYSTEM: u8 = 1;
 const MODE_BOTH: u8 = 2;
 
+// NSEvent constants (NSEvent bindings not enabled in objc2-app-kit features;
+// these values are stable macOS ABI)
+const NS_EVENT_TYPE_LEFT_MOUSE_UP: u64 = 2;
+const NS_EVENT_TYPE_RIGHT_MOUSE_DOWN: u64 = 3;
+const NS_EVENT_TYPE_RIGHT_MOUSE_UP: u64 = 4;
+const NS_EVENT_MODIFIER_FLAG_CONTROL: u64 = 1 << 18;
+
 // Global state
 static ASSERTION_ID: AtomicU32 = AtomicU32::new(0);
 static ASSERTION_ID_2: AtomicU32 = AtomicU32::new(0);
@@ -169,7 +176,7 @@ fn activate() {
 
 fn deactivate() {
     TIMER_EXPIRY.store(0, Ordering::Release);
-    cancel_timer();
+    drop(cancel_timer());
     release_assertion(&ASSERTION_ID);
     release_assertion(&ASSERTION_ID_2);
     update_icon("moon.zzz.fill");
@@ -210,14 +217,15 @@ fn update_mode_menu_state() {
     }
 }
 
-fn cancel_timer() {
+fn cancel_timer() -> Option<thread::JoinHandle<()>> {
     if let Some(cancel) = TIMER_CANCEL.lock().unwrap().take() {
         let (lock, cvar) = &*cancel;
         *lock.lock().unwrap() = true;
         cvar.notify_one();
     }
-    // Take and drop the old handle (don't join — thread will exit promptly via condvar)
-    TIMER_THREAD.lock().unwrap().take();
+    // Hand back the old handle. Most callers drop it (the thread exits
+    // promptly via the condvar); quit joins it for clean shutdown.
+    TIMER_THREAD.lock().unwrap().take()
 }
 
 fn activate_for_duration(minutes: u64) {
@@ -228,7 +236,7 @@ fn activate_for_duration(minutes: u64) {
         return;
     }
 
-    cancel_timer();
+    drop(cancel_timer());
 
     let expiry = now_secs() + (minutes * 60);
     TIMER_EXPIRY.store(expiry, Ordering::Release);
@@ -240,19 +248,32 @@ fn activate_for_duration(minutes: u64) {
         let (lock, cvar) = &*cancel_pair;
         let duration = Duration::from_secs(minutes * 60);
         let guard = lock.lock().unwrap();
-        // Single wait for the full duration — wakes only on cancel or expiry
-        let (guard, _timeout) = cvar.wait_timeout(guard, duration).unwrap();
+        // Wait out the full duration, re-waiting on spurious wakeups;
+        // returns early only when cancelled
+        let (guard, _timeout) = cvar
+            .wait_timeout_while(guard, duration, |cancelled| !*cancelled)
+            .unwrap();
         if *guard {
             return; // Cancelled
         }
         drop(guard);
         if TIMER_EXPIRY.load(Ordering::Acquire) == expiry {
-            // Must dispatch to main thread — deactivate() touches AppKit UI objects
-            extern "C" fn deactivate_on_main(_ctx: *mut std::ffi::c_void) {
-                deactivate();
+            // Must dispatch to main thread — deactivate() touches AppKit UI
+            // objects. The expiry rides along as the context pointer so the
+            // main thread can confirm no new session started while this
+            // block sat in the queue.
+            extern "C" fn deactivate_on_main(ctx: *mut std::ffi::c_void) {
+                let expiry = ctx as u64;
+                if TIMER_EXPIRY.load(Ordering::Acquire) == expiry {
+                    deactivate();
+                }
             }
             unsafe {
-                dispatch_async_f(&_dispatch_main_q, std::ptr::null_mut(), deactivate_on_main);
+                dispatch_async_f(
+                    &_dispatch_main_q,
+                    expiry as *mut std::ffi::c_void,
+                    deactivate_on_main,
+                );
             }
         }
     });
@@ -423,9 +444,10 @@ extern "C" fn button_clicked(_this: *mut AnyObject, _cmd: Sel, _sender: *mut Any
         if !event.is_null() {
             let event_type: u64 = msg_send![event, type];
             let modifier_flags: u64 = msg_send![event, modifierFlags];
-            // Right mouse down (3) or right mouse up (4), or control+left click
-            let is_right_click =
-                event_type == 3 || event_type == 4 || (modifier_flags & 0x40000) != 0;
+            // Right mouse down/up, or control+left click
+            let is_right_click = event_type == NS_EVENT_TYPE_RIGHT_MOUSE_DOWN
+                || event_type == NS_EVENT_TYPE_RIGHT_MOUSE_UP
+                || (modifier_flags & NS_EVENT_MODIFIER_FLAG_CONTROL) != 0;
             if is_right_click {
                 let status_item_ptr = STATUS_ITEM.lock().unwrap().0;
                 let menu_ptr = STATUS_MENU.lock().unwrap().0;
@@ -443,10 +465,11 @@ extern "C" fn button_clicked(_this: *mut AnyObject, _cmd: Sel, _sender: *mut Any
 }
 
 extern "C" fn quit_action(_this: *mut AnyObject, _cmd: Sel, _sender: *mut AnyObject) {
+    // Signal the timer thread and grab its handle before deactivate()
+    // (which would otherwise discard it), then join for clean shutdown.
+    let timer_thread = cancel_timer();
     deactivate();
-    // deactivate() calls cancel_timer(), so the thread is already signalled.
-    // Join it to ensure clean shutdown before terminating the app.
-    if let Some(handle) = TIMER_THREAD.lock().unwrap().take() {
+    if let Some(handle) = timer_thread {
         let _ = handle.join();
     }
     unsafe {
@@ -655,9 +678,43 @@ fn main() {
 
         // Send right-click events to our button handler
         // Fire action on left mouse up and right mouse down/up
-        let mask: i64 = (1 << 2) | (1 << 3) | (1 << 4);
+        let mask: i64 = (1 << NS_EVENT_TYPE_LEFT_MOUSE_UP)
+            | (1 << NS_EVENT_TYPE_RIGHT_MOUSE_DOWN)
+            | (1 << NS_EVENT_TYPE_RIGHT_MOUSE_UP);
         let _: () = msg_send![&status_item, sendActionOn: mask];
 
         app.run();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn xml_escape_escapes_all_special_characters() {
+        assert_eq!(xml_escape("&<>\"'"), "&amp;&lt;&gt;&quot;&apos;");
+    }
+
+    #[test]
+    fn xml_escape_passes_plain_paths_through() {
+        let path = "/Applications/Awake.app/Contents/MacOS/awake";
+        assert_eq!(xml_escape(path), path);
+    }
+
+    #[test]
+    fn xml_escape_does_not_double_escape() {
+        // '&' must be escaped first, or the entities it produces would be re-escaped
+        assert_eq!(xml_escape("a<b&c"), "a&lt;b&amp;c");
+    }
+
+    #[test]
+    fn launch_agent_path_uses_home() {
+        if let Some(path) = launch_agent_path() {
+            assert!(path
+                .to_str()
+                .unwrap()
+                .ends_with("Library/LaunchAgents/io.tmss.awake.plist"));
+        }
     }
 }
