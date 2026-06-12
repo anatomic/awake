@@ -40,7 +40,3 @@ Additional: Launch-at-login via LaunchAgent plist at `~/Library/LaunchAgents/io.
 ## Release Process
 
 Update version in `Cargo.toml`, commit, tag `vX.Y.Z`, push. GitHub Actions builds, signs, notarizes, creates release, and updates Homebrew cask automatically.
-
-## Issue Tracking
-
-Uses **bd** (beads) for git-backed issue tracking. See AGENTS.md for workflow. Key commands: `bd ready`, `bd show <id>`, `bd close <id>`, `bd sync`.
