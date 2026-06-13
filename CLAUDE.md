@@ -31,7 +31,7 @@ All code lives in `src/main.rs` with three core components:
 
 2. **Menu Bar UI** — AppKit `NSStatusBar` status item. Left-click toggles, right-click opens menu. Custom `AwakeDelegate` Objective-C class registered at runtime handles actions. Icons: moon (sleep) / coffee (awake, SF Symbol).
 
-3. **Timer System** — Background thread with 1-second sleep intervals for responsive cancellation. `AtomicU64` expiry time. Supports 15m/30m/1h/2h durations.
+3. **Timer System** — Background thread that blocks on a `Condvar` for the full duration (zero CPU while waiting); cancellation signals the condvar for immediate wakeup. `AtomicU64` expiry time, re-checked on the main thread before deactivating. Supports 15m/30m/1h/2h durations.
 
 Additional: Launch-at-login via LaunchAgent plist at `~/Library/LaunchAgents/io.tmss.awake.plist`.
 
