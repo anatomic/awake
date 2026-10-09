@@ -44,7 +44,7 @@ jobs:
           echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$CERT_PATH"
 
           # Install Apple Developer ID intermediate certificate (G2)
-          curl -sL "https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer" \
+          curl -fsSL "https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer" \
               -o "$RUNNER_TEMP/DeveloperIDG2CA.cer"
 
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
@@ -94,7 +94,7 @@ jobs:
           # Use GIT_ASKPASS to avoid embedding token in clone URL (prevents log exposure)
           export GIT_ASKPASS="$RUNNER_TEMP/git-askpass.sh"
           printf '#!/bin/sh\necho "%s"\n' "${HOMEBREW_TAP_TOKEN}" > "$GIT_ASKPASS"
-          chmod +x "$GIT_ASKPASS"
+          chmod 700 "$GIT_ASKPASS"
           git clone "https://x-access-token@github.com/anatomic/homebrew-awake.git" /tmp/homebrew-awake
           cd /tmp/homebrew-awake
 
@@ -131,4 +131,5 @@ jobs:
         run: |
           KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
           security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
-          rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/DeveloperIDG2CA.cer"
+          rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/DeveloperIDG2CA.cer" \
+              "$RUNNER_TEMP/git-askpass.sh"

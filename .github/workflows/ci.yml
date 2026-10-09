@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 env:
   APP_NAME: Awake
 
@@ -61,7 +64,7 @@ jobs:
 
           echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$CERT_PATH"
 
-          curl -sL "https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer" \
+          curl -fsSL "https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer" \
               -o "$RUNNER_TEMP/DeveloperIDG2CA.cer"
 
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
